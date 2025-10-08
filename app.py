@@ -1,5 +1,6 @@
 import os
 import requests
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -9,43 +10,62 @@ NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 @app.route("/digest", methods=["POST"])
 def digest():
     data = request.form
-    league = data.get("text", "NFL")
+    text = data.get("text", "NFL 7")  # Default = NFL 7 days
+    parts = text.split()
 
-    # --- Step 1: Fetch recent news ---
-    url = f"https://newsapi.org/v2/everything?q={league}&language=en&sortBy=popularity&pageSize=20&apiKey={NEWS_API_KEY}"
+    # --- Step 1: Parse league and number of days ---
+    league = parts[0] if len(parts) > 0 else "NFL"
+    days = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 7
+
+    # --- Step 2: Build date-filtered NewsAPI request ---
+    from_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+    url = (
+        f"https://newsapi.org/v2/everything?"
+        f"q={league}&language=en&sortBy=publishedAt&pageSize=20&from={from_date}"
+        f"&apiKey={NEWS_API_KEY}"
+    )
     response = requests.get(url)
     articles = response.json().get("articles", [])
 
-    # --- Step 2: Filtering rules ---
+    # --- Step 3: Filtering rules ---
     good_keywords = [
-        "touchdown","win","loss","comeback","record","performance",
-        "mvp","rookie","trade","highlight","game","defense","offense",
-        "qb","quarterback","coach","player","team","fans","score",
-        "upset","victory","playoff","interception","sack","rush",
-        "catch","field goal","pass","drive","overtime"
+        "touchdown", "win", "loss", "comeback", "record", "performance",
+        "mvp", "rookie", "trade", "highlight", "game", "defense", "offense",
+        "qb", "quarterback", "coach", "player", "team", "fans", "score",
+        "upset", "victory", "playoff", "interception", "sack", "rush",
+        "catch", "field goal", "pass", "drive", "overtime"
     ]
+
     bad_keywords = [
-        "halftime","celebrity","bad bunny","taylor swift","jennifer lopez",
-        "college","unc","recruiting","fantasy","betting","gossip",
-        "drama","rumor","culture","politics","lawsuit","business",
-        "concert","fashion","movie","tv","broadway","award","celebration",
-        "charity","foundation","community","weather","ticket","raffle"
+        # Pop culture & entertainment
+        "halftime", "celebrity", "bad bunny", "taylor swift", "jennifer lopez",
+        "beyonce", "rihanna", "fashion", "music", "concert", "award", "movie",
+        # College / unrelated sports
+        "college", "unc", "recruiting", "ncaa", "basketball", "baseball",
+        "hockey", "soccer", "ufc", "mma", "tennis", "golf", "mlb", "nba", "nhl",
+        # Off-field / gossip / business
+        "fantasy", "betting", "wager", "odds", "drama", "rumor", "culture",
+        "politics", "lawsuit", "investigation", "arrest", "ownership", "union",
+        "sponsorship", "endorsement", "contract extension", "business deal",
+        # Misc
+        "charity", "foundation", "community", "weather", "raffle", "ticket"
     ]
 
     def is_relevant(article):
-        text = f"{article.get('title','')} {article.get('description','')}".lower()
+        text = f"{article.get('title', '')} {article.get('description', '')}".lower()
         return any(k in text for k in good_keywords) and not any(k in text for k in bad_keywords)
 
+    # --- Step 4: Apply filters ---
     filtered = [a for a in articles if is_relevant(a)]
     top = filtered[:5]
 
-    # --- Step 3: Handle no results ---
+    # --- Step 5: Handle empty results ---
     if not top:
-        return jsonify({"text": f"No trending {league} stories found this week."})
+        return jsonify({"text": f"No trending {league} stories found in the past {days} days."})
 
-    # --- Step 4: Build Slack message ---
-    text_block = f"*{league.upper()} — Weekly Digest*\n"
-    text_block += "Here are this week's top trending stories across the league:\n\n"
+    # --- Step 6: Build Slack message ---
+    text_block = f"*{league.upper()} — {days}-Day Digest*\n"
+    text_block += "Here are the top trending stories across the league:\n\n"
 
     for a in top:
         title = a.get("title", "Untitled")
@@ -54,3 +74,7 @@ def digest():
         text_block += f"• <{url}|{title}> — {source}\n"
 
     return jsonify({"text": text_block})
+
+@app.route("/ping", methods=["GET", "HEAD"])
+def ping():
+    return "OK", 200
