@@ -5,6 +5,8 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 
+# ---------------- Data Banks ---------------- #
+
 NFL_TEAMS = [
     "49ers","Bears","Bengals","Bills","Broncos","Browns","Buccaneers","Cardinals",
     "Chargers","Chiefs","Colts","Commanders","Cowboys","Dolphins","Eagles","Falcons",
@@ -38,7 +40,7 @@ INJURY_TERMS = [
 
 TIMEFRAME_MAP = {"today":1,"yesterday":1,"week":7,"month":30}
 
-# ---------------- Helpers ---------------- #
+# ---------------- Helper Functions ---------------- #
 
 def parse_cmd(txt):
     parts = txt.strip().split()
@@ -51,16 +53,14 @@ def parse_cmd(txt):
     return league, days
 
 def fetch_news(days):
-    """Fetch news and enforce freshness manually."""
+    """Fetch NFL-only stories within a specific time window."""
     now = datetime.now(timezone.utc)
-    from_date = (now - timedelta(days=days))
+    from_date = now - timedelta(days=days)
     to_date = now
-    month_year = now.strftime("%B %Y")  # e.g. 'October 2025'
 
     query = (
-        f"(NFL OR National Football League OR football) AND "
-        f"(game OR win OR loss OR highlights OR touchdown OR trade OR injury OR rookie OR contract OR coach OR playoffs OR score) "
-        f"AND \"{month_year}\""
+        "(NFL OR \"National Football League\" OR \"pro football\" OR quarterback OR running back OR wide receiver "
+        "OR Super Bowl OR playoffs OR touchdown OR trade OR injury OR highlights)"
     )
 
     url = (
@@ -78,15 +78,29 @@ def fetch_news(days):
     r.raise_for_status()
     articles = r.json().get("articles", [])
 
-    # manually verify date window
+    # manual filtering: NFL-focused and within range
     fresh = []
     for a in articles:
+        title = a.get("title", "").lower()
+        desc = a.get("description", "").lower()
+        pub = a.get("publishedAt", "")
+
+        # skip if not within window
         try:
-            pub = datetime.fromisoformat(a["publishedAt"].replace("Z","+00:00"))
-            if from_date <= pub <= to_date:
-                fresh.append(a)
+            pub_dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+            if not (from_date <= pub_dt <= to_date):
+                continue
         except Exception:
             continue
+
+        # require NFL relevance
+        if (
+            "nfl" in title or "nfl" in desc
+            or any(team.lower() in title for team in NFL_TEAMS)
+            or any(player.lower() in title for player in STAR_PLAYERS)
+        ):
+            fresh.append(a)
+
     return fresh
 
 def is_sports_site(url):
@@ -117,7 +131,7 @@ def tag_story(a):
         return "WATCH"
     return "EVERGREEN"
 
-# ---------------- Slack Command ---------------- #
+# ---------------- Slack Command Endpoint ---------------- #
 
 @app.route("/digest", methods=["POST"])
 def digest():
@@ -138,7 +152,7 @@ def digest():
         if not has_team_or_player(full):
             continue
         sc = score_story(a)
-        if sc >= 2:  # slightly looser threshold
+        if sc >= 2:  # relevant threshold
             keep.append((sc, a))
 
     keep = sorted(keep, key=lambda x: x[0], reverse=True)[:12]
@@ -165,12 +179,18 @@ def digest():
             src = a.get("source", {}).get("name", "")
             url = a.get("url", "")
             desc = a.get("description", "") or "No description available"
+            pub = a.get("publishedAt", "")
+            try:
+                pub_dt = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+                pub_str = pub_dt.strftime("%b %d")
+            except:
+                pub_str = "Recent"
             tag = tag_story(a)
             tag_emoji = "🔥" if tag == "HOT" else "👀" if tag == "WATCH" else "🕐"
             lines.append(
                 f"• *<{url}|{title}>*  \n"
                 f"_{desc}_  \n"
-                f"{tag_emoji} `{tag}` — *{src}*\n"
+                f"🗓️ {pub_str} | {tag_emoji} `{tag}` — *{src}*\n"
             )
 
     if inj:
