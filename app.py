@@ -10,12 +10,29 @@ NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 @app.route("/digest", methods=["POST"])
 def digest():
     data = request.form
-    text = data.get("text", "NFL 7")  # Default = NFL 7 days
+    text = data.get("text", "NFL 7")  # Default command text
     parts = text.split()
 
-    # --- Step 1: Parse league and number of days ---
+    # --- Step 1: Parse league and timeframe ---
     league = parts[0] if len(parts) > 0 else "NFL"
-    days = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 7
+    timeframe = parts[1].lower() if len(parts) > 1 else "7"
+
+    # Convert natural language into days
+    timeframe_map = {
+        "today": 1,
+        "yesterday": 1,
+        "week": 7,
+        "month": 30,
+        "year": 365
+    }
+
+    # Determine number of days
+    if timeframe.isdigit():
+        days = int(timeframe)
+    elif timeframe in timeframe_map:
+        days = timeframe_map[timeframe]
+    else:
+        days = 7  # fallback default
 
     # --- Step 2: Build date-filtered NewsAPI request ---
     from_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
