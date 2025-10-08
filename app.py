@@ -3,11 +3,9 @@ from datetime import datetime, timedelta, timezone
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
-
 NEWS_API_KEY = os.environ.get("NEWS_API_KEY")
 
-# ---------------------- NFL keywords and team/player lists ---------------------- #
-
+# ---------------- NFL Data ---------------- #
 NFL_TEAMS = [
     "49ers","Bears","Bengals","Bills","Broncos","Browns","Buccaneers","Cardinals",
     "Chargers","Chiefs","Colts","Commanders","Cowboys","Dolphins","Eagles","Falcons",
@@ -40,7 +38,7 @@ INJURY_TERMS = [
 
 TIMEFRAME_MAP = {"today":1,"yesterday":1,"week":7,"month":30}
 
-# --------------------------- Helper functions --------------------------- #
+# ---------------- Helpers ---------------- #
 
 def parse_cmd(txt):
     parts = txt.strip().split()
@@ -53,15 +51,40 @@ def parse_cmd(txt):
     return league, days
 
 def fetch_news(days):
-    from_date = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    """Fetch news and enforce freshness manually."""
+    now = datetime.now(timezone.utc)
+    from_date = (now - timedelta(days=days))
+    to_date = now
+
+    query = (
+        "(NFL OR National Football League OR football) AND "
+        "(game OR win OR loss OR highlights OR touchdown OR trade OR injury OR rookie OR contract OR coach)"
+    )
+
+    sort = "publishedAt"
     url = (
         f"https://newsapi.org/v2/everything?"
-        f"q=NFL%20football&language=en&sortBy=publishedAt&pageSize=50&from={from_date}"
-        f"&apiKey={NEWS_API_KEY}"
+        f"q={query}&"
+        f"language=en&"
+        f"sortBy={sort}&"
+        f"pageSize=50&"
+        f"apiKey={NEWS_API_KEY}"
     )
+
     r = requests.get(url, timeout=10)
     r.raise_for_status()
-    return r.json().get("articles", [])
+    articles = r.json().get("articles", [])
+
+    # --- manually filter to date window ---
+    fresh = []
+    for a in articles:
+        try:
+            pub = datetime.fromisoformat(a["publishedAt"].replace("Z","+00:00"))
+            if from_date <= pub <= to_date:
+                fresh.append(a)
+        except Exception:
+            continue
+    return fresh
 
 def is_sports_site(url):
     return any(x in url.lower() for x in SPORT_SITES)
@@ -92,7 +115,7 @@ def tag_story(a):
         return "WATCH"
     return "EVERGREEN"
 
-# --------------------------- Slack endpoint --------------------------- #
+# ---------------- Slack Command ---------------- #
 
 @app.route("/digest", methods=["POST"])
 def digest():
@@ -118,19 +141,20 @@ def digest():
 
     keep = sorted(keep, key=lambda x: x[0], reverse=True)[:10]
     if not keep:
-        return jsonify({"text": "No NFL-related items found."})
+        return jsonify({"text": f"No recent NFL items found in past {days} days."})
 
-    trending = []
-    inj = []
+    trending, inj = [], []
     for sc, a in keep:
         if is_injury(a.get("title","") + a.get("description","")):
             inj.append(a)
         else:
             trending.append(a)
 
-    # ------------------- CLEANER SLACK OUTPUT ------------------- #
+    # --------- SLACK FORMATTING --------- #
+    now = datetime.now().strftime("%b %d, %Y")
+    start = (datetime.now() - timedelta(days=days)).strftime("%b %d")
     lines = []
-    lines.append(f"*🏈 NFL Buzz — Past {days} Days*")
+    lines.append(f"*🏈 NFL Buzz — Past {days} Days* _(from {start} to {now})_")
     lines.append(f"> _{len(trending)} trending stories found._\n")
 
     if trending:
