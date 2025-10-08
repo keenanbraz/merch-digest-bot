@@ -55,18 +55,21 @@ def fetch_news(days):
     now = datetime.now(timezone.utc)
     from_date = (now - timedelta(days=days))
     to_date = now
+    month_year = now.strftime("%B %Y")  # e.g. 'October 2025'
 
     query = (
-        "(NFL OR National Football League OR football) AND "
-        "(game OR win OR loss OR highlights OR touchdown OR trade OR injury OR rookie OR contract OR coach OR playoffs OR score)"
+        f"(NFL OR National Football League OR football) AND "
+        f"(game OR win OR loss OR highlights OR touchdown OR trade OR injury OR rookie OR contract OR coach OR playoffs OR score) "
+        f"AND \"{month_year}\""
     )
 
-    sort = "publishedAt"
     url = (
         f"https://newsapi.org/v2/everything?"
         f"q={query}&"
         f"language=en&"
-        f"sortBy={sort}&"
+        f"from={from_date.strftime('%Y-%m-%d')}&"
+        f"to={to_date.strftime('%Y-%m-%d')}&"
+        f"sortBy=publishedAt&"
         f"pageSize=80&"
         f"apiKey={NEWS_API_KEY}"
     )
@@ -75,6 +78,7 @@ def fetch_news(days):
     r.raise_for_status()
     articles = r.json().get("articles", [])
 
+    # manually verify date window
     fresh = []
     for a in articles:
         try:
@@ -98,8 +102,8 @@ def is_injury(text):
 def score_story(a):
     t = f"{a.get('title','')} {a.get('description','')}".lower()
     score = 0
-    if has_team_or_player(t): score += 2  # NFL-specific context
-    if any(k in t for k in GOOD_TERMS): score += 1  # Buzzword boost
+    if has_team_or_player(t): score += 2
+    if any(k in t for k in GOOD_TERMS): score += 1
     if "rookie" in t or "record" in t or "trade" in t: score += 1
     return score
 
@@ -134,7 +138,7 @@ def digest():
         if not has_team_or_player(full):
             continue
         sc = score_story(a)
-        if sc >= 2:  # more lenient
+        if sc >= 2:  # slightly looser threshold
             keep.append((sc, a))
 
     keep = sorted(keep, key=lambda x: x[0], reverse=True)[:12]
@@ -160,7 +164,7 @@ def digest():
             title = a.get("title", "")
             src = a.get("source", {}).get("name", "")
             url = a.get("url", "")
-            desc = a.get("description", "") or "No description"
+            desc = a.get("description", "") or "No description available"
             tag = tag_story(a)
             tag_emoji = "🔥" if tag == "HOT" else "👀" if tag == "WATCH" else "🕐"
             lines.append(
@@ -170,7 +174,7 @@ def digest():
             )
 
     if inj:
-        lines.append("\n*🚑 Injury Updates*")
+        lines.append("\n*🩹 Injury Watch*")
         for a in inj:
             title = a.get("title", "")
             src = a.get("source", {}).get("name", "")
